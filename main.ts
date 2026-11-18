@@ -27,6 +27,61 @@ if (!existsSync(source)) {
   throw new Error('entry.png is missing beside main.ts');
 }
 
+// The competition caps the source image at 1 MiB: refuse an oversized
+// file instead of handing the judge an entry that breaks the rules.
+const MAX_SOURCE_BYTES = 1048576;
+const sourceBytes = statSync(source).size;
+if (sourceBytes > MAX_SOURCE_BYTES) {
+  throw new Error(
+    `entry.png is ${sourceBytes} bytes, over the 1 MiB competition cap`,
+  );
+}
+
+// The competition caps each side at 1024 px: read the dimensions out of
+// the file header — PNG IHDR or JPEG SOF marker — and refuse an oversized
+// image instead of submitting an entry that breaks the rules.
+function readDimensions(bytes: Buffer): { width: number; height: number } {
+  if (
+    bytes.length >= 24 &&
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47
+  ) {
+    return {
+      width: bytes.readUInt32BE(16),
+      height: bytes.readUInt32BE(20),
+    };
+  }
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xd8) {
+    let offset = 2;
+    while (offset + 9 < bytes.length) {
+      if (bytes[offset] !== 0xff) {
+        throw new Error('entry.png has a malformed JPEG segment');
+      }
+      const marker = bytes[offset + 1];
+      const length = bytes.readUInt16BE(offset + 2);
+      if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+        return {
+          height: bytes.readUInt16BE(offset + 5),
+          width: bytes.readUInt16BE(offset + 7),
+        };
+      }
+      offset += 2 + length;
+    }
+    throw new Error('entry.png has no JPEG SOF marker');
+  }
+  throw new Error('entry.png is neither PNG nor JPEG');
+}
+
+const MAX_SIDE_PX = 1024;
+const { width, height } = readDimensions(readFileSync(source));
+if (width > MAX_SIDE_PX || height > MAX_SIDE_PX) {
+  throw new Error(
+    `entry.png is ${width}x${height}, over the 1024 px competition cap`,
+  );
+}
+
 mkdirSync(outputDir, { recursive: true });
 copyFileSync(source, target);
 
